@@ -1,0 +1,338 @@
+---
+title: "Dynamic models with simecol including agent based modelling"
+author: "Kushan De Silva"
+date: "May 3, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(simecol)
+data(lv)
+require("tcltk")
+
+lv <- new("odeModel",
+main = function (time, init, parms) {
+with(as.list(c(init, parms)), {
+dn1 <- k1 * N1 - k2 * N1 * N2
+dn2 <- - k3 * N2 + k2 * N1 * N2
+list(c(dn1, dn2))
+})
+},
+parms = c(k1 = 0.2, k2 = 0.2, k3 = 0.2),
+times = c(from = 0, to = 100, by = 0.5),
+init = c(N1 = 0.5, N2 = 1),
+solver = "lsoda"
+)
+lv <- sim(lv)
+plot(lv)
+
+LVPP <- new("odeModel",
+main = function(t, n, parms) {
+with(parms, {
+dn <- r * n + n * (A %*% n)
+list(c(dn))
+})
+},
+parms = list(
+# growth/death rates
+r = c(k1 = 0.2, k3 = -0.2),
+# interaction matrix
+A = matrix(c(0.0, -0.2,
+0.2, 0.0),
+nrow = 2, ncol = 2, byrow=TRUE)
+),
+times = c(from = 0, to = 100, by = 0.5),
+init = c(N1 = 0.5, N2 = 1),
+solver = "lsoda"
+)
+plot(sim(LVPP))
+
+
+data(CA)
+times(CA)["to"] <- 10
+plot(sim(CA))
+set.seed(345)
+times(CA)["to"] <- 50
+CA <- sim(CA)
+library(lattice)
+tcol <- (terrain.colors(13))[-13]
+x <- out(CA, last=TRUE)
+x <- ifelse(x == 0, NA, x)
+levelplot(x,
+cuts = 11,
+col.regions = tcol,
+colorkey = list(at = seq(0, 55, 5))
+)
+
+CA <- new("gridModel",
+main = function(time, init, parms) {
+z <- init
+nb <- eightneighbors(z)
+pgen <- 1 - (1 - parms$pbirth)^nb
+zgen <- ifelse(z == 0 &
+runif(z) < pgen, 1, 0)
+zsurv <- ifelse(z >= 1 &
+runif(z) < (1 - parms$pdeath),
+z + 1, 0)
+zgen + zsurv
+},
+parms = list(pbirth = 0.02, pdeath = 0.01),
+times = c(from = 1, to = 50, by = 1),
+init = matrix(0, nrow = 40, ncol = 40),
+solver = "iteration"
+)
+init(CA)[18:22,18:22] <- 1
+
+
+data(chemostat)
+plot(sim(chemostat))
+parms(chemostat)["D"] <- 0.9
+plot(sim(chemostat))
+
+chemostat <- new("odeModel",
+main = function(time, init, parms, inputs = NULL) {
+with(as.list(c(init, parms)), {
+mu <- vm * S/(km + S) # Monod equation
+dx1 <- mu * X - D * X # cells, e.g. algae
+dx2 <- D *(S0 - S) - 1/Y * mu * X # substrate, e.g. phosphorus
+list(c(dx1, dx2))
+})
+},
+parms = c(
+vm = 1.0, # max growth rate, 1/d
+km = 2.0, # half saturation constant, mumol / L
+Y = 100, # cells /mumol Substrate
+D = 0.5, # dilution rate, 1/d
+S0 = 10 # substrate in inflow, mumol / L
+),
+times = c(from=0, to=40, by=.5),
+init = c(X=10, S=10), # cells / L; Substrate umol / L
+solver = "lsoda"
+)
+
+
+data(conway)
+plot(sim(conway))
+## more interesting start conditions
+m <- matrix(0, 40, 40)
+m[5:35, 19:21] <- 1
+init(conway) <- m
+plot(sim(conway), col=c("white", "green"), axes = FALSE)
+## change survival rules
+parms(conway) <- list(srv = c(3,4), gen = c(3, 4))
+plot(sim(conway), col = c("white", "green"), axes = FALSE)
+## Not run:
+require("tcltk")
+init(conway) <- matrix(0, 10, 10)
+conway <- editInit(conway) # enter some "1"
+sim(conway, animate = TRUE, delay = 100)
+
+conway <- new("gridModel",
+main = function(time, init, parms) {
+x <- init
+nb <- eightneighbours(x)
+surviv <- (x > 0 & (nb %in% parms$srv))
+gener <- (x == 0 & (nb %in% parms$gen))
+x <- (surviv + gener) > 0
+return(x)
+},
+parms = list(srv = c(2, 3), gen = 3),
+times = 1:17,
+init = matrix(round(runif(1000)), ncol = 40),
+solver = "iteration"
+)
+
+
+data(diffusion)
+plot(sim(diffusion))
+## show "grid of environmental conditions"
+image(inputs(diffusion))
+## (2) scenario
+## with homogeneous environment (no "refuge" in the middle)
+no_refuge <- diffusion # Cloning of the whole model object
+inputs(no_refuge) <- matrix(1, 100, 100)
+plot(sim(no_refuge))
+
+observer(diffusion) <- function(state, ...) {
+## numerical output to the screen
+cat("mean x=", mean(state$x),
+", mean y=", mean(state$y),
+", sd x=", sd(state$x),
+", sd y=", sd(state$y), "\n")
+## animation
+par(mfrow=c(2,2))
+plot(state$x, state$y, xlab="x", ylab="y", pch=16, col="red", xlim=c(0, 100))
+hist(state$y)
+hist(state$x)
+## default case: return the state --> iteration stores it in "out"
+state
+}
+sim(diffusion)
+## remove the observer and restore original behavior
+observer(diffusion) <- NULL
+diffusion <- sim(diffusion)
+
+diffusion <- rwalkModel(
+main = function(time, init, parms, inputs = NULL) {
+speed <- parms$speed
+xleft <- parms$area[1]
+xright <- parms$area[2]
+ybottom <- parms$area[3]
+ytop <- parms$area[4]
+x <- init$x # x coordinate
+y <- init$y # y coordinate
+a <- init$a # angle (in radians)
+n <- length(a)
+## Rule 1: respect environment (grid as given in "inputs")
+## 1a) identify location on "environmental 2D grid" for each individual
+i.j <- array(c(pmax(1, ceiling(x)), pmax(1, ceiling(y))), dim=c(n, 2))
+## 1b) speed dependend on "environmental conditions"
+speed <- speed * inputs[i.j]
+## Rule 2: Random Walk
+a <- (a + 2 * pi / runif(a))
+dx <- speed * cos(a)
+dy <- speed * sin(a)
+x <- x + dx
+y <- y + dy
+## Rule 3: Wrap Around
+x <- ifelse(x > xright, xleft, x)
+y <- ifelse(y > ytop, ybottom, y)
+x <- ifelse(x < xleft, xright, x)
+y <- ifelse(y < ybottom, ytop, y)
+data.frame(x=x, y=y, a=a)
+},
+times = c(from=0, to=100, by=1),
+parms = list(ninds=50, speed = 1, area = c(0, 100, 0, 100)),
+solver = "iteration",
+initfunc = function(obj) {
+ninds <- obj@parms$ninds
+xleft <- obj@parms$area[1]
+xright <- obj@parms$area[2]
+ybottom <- obj@parms$area[3]
+ytop <- obj@parms$area[4]
+obj@init <- data.frame(x = runif(ninds) * (xright - xleft) + xleft,
+y = runif(ninds) * (ytop - ybottom) + ybottom,
+a = runif(ninds) * 2 * pi)
+inp <- matrix(1, nrow=100, ncol=100)
+inp[, 45:55] <- 0.2
+inputs(obj) <- inp
+obj
+}
+)
+
+
+n <- 80; m <- 80
+x <- matrix(rep(0, m*n), nrow = n)
+x[round(runif(1500, 1, m*n))] <- 1
+## uncomment this for another figure
+#x[40, 20:60] <- 1
+image(x, col=c("wheat", "grey", "red"))
+x2 <- x
+for (i in 2:10){
+nb <- eightneighbours(x)
+## survive with 2 or 3 neighbours
+xsurv <- ifelse(x > 0 & (nb == 2 | nb ==3), 1, 0)
+## generate for empty cells with 3 neigbours
+xgen <- ifelse(x == 0 & nb == 3, 1, 0)
+x <- ((xgen + xsurv)>0)
+x2 <- ifelse(x2>1, 1, x2)
+x2 <- ifelse(x>0, 2, x2)
+image(x2, col=c("wheat", "grey", "red"), add=TRUE)
+}
+
+
+## weight matrix for neighbourhood determination
+wdist <- matrix(c(0.5,0.5,0.5,0.5,0.5,
+0.5,1.0,1.0,1.0,0.5,
+0.5,1.0,1.0,1.0,0.5,
+0.5,1.0,1.0,1.0,0.5,
+0.5,0.5,0.5,0.5,0.5), nrow=5)
+## state matrix
+n <- 20; m <- 20
+x <- matrix(rep(0, m * n), nrow = n)
+## set state of some cells to 1
+x[10, 10] <- 1
+x[1, 5] <- 1
+x[n, 15] <- 1
+x[5, 2] <- 1
+x[15, m] <- 1
+#x[n, 1] <- 1 # corner
+opar <- par(mfrow = c(2, 2))
+## start population
+image(x)
+## open boundaries
+image(matrix(neighbours(x, wdist = wdist, bounds = 0), nrow = n))
+## torus (donut like)
+image(matrix(neighbours(x, wdist = wdist, bounds = 1), nrow = n))
+## cylinder (left and right boundaries connected)
+image(matrix(neighbours(x, wdist = wdist, bounds = c(0, 1, 0, 1)), nrow = n))
+par(opar) # reset graphics area
+
+mycolors <- function(n) {
+col <- c("wheat", "darkgreen")
+if (n>2) col <- c(col, heat.colors(n - 2))
+col
+}
+pj <- 0.99 # survival probability of juveniles
+pa <- 0.99 # survival probability of adults
+ps <- 0.1 # survival probability of senescent
+ci <- 1.0 # "seeding constant"
+adult <- 5 # age of adolescence
+old <- 10 # age of senescence
+## Define a start population
+n <- 80
+m <- 80
+x <- rep(0, m*n)
+## stochastic seed
+## x[round(runif(20,1,m*n))] <- adult
+dim(x)<- c(n, m)
+## rectangangular seed in the middle
+x[38:42, 38:42] <- 5
+## plot the start population
+image(x, col = mycolors(2))
+
+
+
+data(chemostat)
+cs1 <- chemostat
+## generate some noisy data
+parms(cs1)[c("vm", "km")] <- c(2, 10)
+times(cs1) <- c(from = 0, to = 20, by = 2)
+yobs <- out(sim(cs1))
+obstime <- yobs$time
+yobs$time <- NULL
+yobs$S <- yobs$S + rnorm(yobs$S, sd = 0.1 * sd(yobs$S))*2
+yobs$X <- yobs$X + rnorm(yobs$X, sd = 0.1 * sd(yobs$X))
+## SSQ between model and data
+ssqOdeModel(NULL, cs1, obstime, yobs)
+## SSQ between model and data, different parameter set
+ssqOdeModel(p=c(vm=1, km=2), cs1, obstime, yobs)
+## SSQ between model and data, downweight second observation
+## (both variables)
+weights <- data.frame(X=rep(1, nrow(yobs)), S = rep(1, nrow=(yobs)))
+ssqOdeModel(p=c(vm=1, km=2), cs1, obstime, yobs, weights=weights)
+## downweight 3rd data set (row)
+weights[3,] <- 0.1
+ssqOdeModel(p=c(vm=1, km=2), cs1, obstime, yobs, weights=weights)
+## give one value double weight (e.g. 4th value of S)
+weights$S[4] <- 2
+ssqOdeModel(p=c(vm=1, km=2), cs1, obstime, yobs, weights=weights)
+
+data(upca)
+plot(sim(upca))
+# omit stabilizing parameter wstar
+parms(upca)["wstar"] <- 0
+plot(sim(upca))
+# change functional response from
+# Holling II (default) to Lotka-Volterra
+equations(upca)$f <- function(x, y, k) x * y
+plot(sim(upca))
+
+
+
+```
+
